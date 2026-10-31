@@ -1,0 +1,612 @@
+<title>Radar de Ameaças</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: mapa de países em preto e branco ocupa a largura toda; o país líder da métrica fica em vermelho. Abaixo: país selecionado, resumo, ranking, falhas, malware. Visual preto e branco único, de propósito. */
+:root {
+  --bg: #000;
+  --panel: #0c0c0c;
+  --panel-2: #151515;
+  --line: #2a2a2a;
+  --fg: #fff;
+  --muted: #a3a3a3;
+  --land: #202020;
+  --edge: #5a5a5a;
+  --red: #ff2b2b;
+  --font-body: "Archivo", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.45;
+  padding-block: 0 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+h1, h2, h3 { margin: 0; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; text-wrap: balance; }
+h1 { font-size: 22px; line-height: 1; }
+h2 { font-size: 18px; line-height: 1.1; border-bottom: 2px solid var(--fg); padding-bottom: 8px; }
+h3 { font-size: 15px; }
+p { margin: 0; }
+button, input, label { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.sec { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.lead { color: var(--muted); font-size: 15px; max-width: 64ch; }
+
+/* barra do topo */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; background: var(--bg); border-bottom: 1px solid var(--line); margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 30; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; border: 1px solid var(--fg); padding: 5px 10px; border-radius: 999px; }
+.live i { width: 9px; height: 9px; border-radius: 50%; background: var(--fg); }
+.live.on i { background: var(--red); animation: blink 1.4s steps(2, start) infinite; }
+.live.off { border-color: var(--muted); color: var(--muted); } .live.off i { background: var(--muted); }
+@keyframes blink { 50% { opacity: 0.15; } }
+
+/* modos */
+.modes { display: flex; border: 1px solid var(--fg); border-radius: 10px; overflow: hidden; }
+.modes button { flex: 1 1 0; min-width: 0; border: 0; background: var(--bg); padding: 12px 8px; min-height: 48px; font-weight: 600; font-size: 14px; line-height: 1.2; }
+.modes button + button { border-left: 1px solid var(--fg); }
+.modes button[aria-pressed="true"] { background: var(--fg); color: #000; }
+.modes button[aria-disabled="true"] { color: #6a6a6a; }
+.note { font-size: 13.5px; color: var(--muted); min-height: 20px; }
+
+/* mapa */
+.stage { position: relative; background: #000; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; height: clamp(290px, 80vw, 560px); }
+#map { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; background: #000; user-select: none; -webkit-user-select: none; }
+#map path.c { fill: var(--land); stroke: var(--edge); stroke-width: 0.7; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+#map path.c.sel { stroke: #fff; stroke-width: 2.2; }
+#map text { fill: #fff; font-family: var(--font-body); font-weight: 600; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: #000; stroke-linejoin: round; pointer-events: none; }
+.zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+.zoom button { width: 46px; height: 46px; border-radius: 10px; border: 1px solid var(--fg); background: #000; font-size: 22px; font-weight: 600; line-height: 1; }
+.legend { position: absolute; left: 10px; bottom: 10px; right: 68px; display: flex; flex-direction: column; gap: 6px; z-index: 3; pointer-events: none; }
+.legend .chip { align-self: flex-start; background: rgba(0, 0, 0, 0.82); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
+.legend .sw { width: 12px; height: 12px; background: var(--red); flex: none; }
+.overlay { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; padding: 22px; background: rgba(0, 0, 0, 0.82); }
+.overlay[hidden] { display: none; }
+.overlay h2 { border: 0; padding: 0; }
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--fg); background: var(--bg); font-weight: 600; }
+.btn.solid { background: var(--fg); color: #000; }
+
+/* resumo */
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 720px) { .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.card { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.card .k { font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.card .v { font-weight: 800; font-size: 34px; line-height: 1.05; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.card .v.sm { font-size: 22px; padding: 6px 0; }
+.card .v.red { color: var(--red); }
+.card .d { font-size: 13px; color: var(--muted); }
+
+/* país selecionado */
+.sheet { border: 1px solid var(--fg); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.sheet .head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.sheet .head h3 { font-size: 24px; text-transform: none; line-height: 1.1; }
+.x { width: 44px; height: 44px; flex: none; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 20px; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.kv div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.kv b { display: block; font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kv span { font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.hint { font-size: 14px; color: var(--muted); }
+
+/* listas */
+.rank, .bars, .srv, .vulns { list-style: none; margin: 0; padding: 0; }
+.rank { display: flex; flex-direction: column; }
+.rank li button { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; text-align: left; border: 0; border-top: 1px solid var(--line); background: transparent; padding: 12px 0; min-height: 52px; }
+.rank li:first-child button { border-top: 0; }
+.rank .n { font-family: var(--font-mono); color: var(--muted); font-size: 14px; }
+.rank .nm { font-weight: 600; overflow-wrap: anywhere; }
+.rank .val { font-family: var(--font-mono); font-size: 14px; }
+.rank .tr { grid-column: 2 / -1; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.rank .tr b { display: block; height: 100%; background: var(--fg); }
+.rank li.top .n, .rank li.top .val { color: var(--red); } .rank li.top .tr b { background: var(--red); }
+.bars { display: flex; flex-direction: column; gap: 12px; }
+.bars li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; font-size: 15px; }
+.bars .t { grid-column: 1 / -1; height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.bars .t b { display: block; height: 100%; background: var(--fg); }
+.bars .nn { font-family: var(--font-mono); color: var(--muted); font-size: 14px; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+@media (min-width: 720px) { .two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.box { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.srv li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px; }
+.srv li:first-child { border-top: 0; }
+.srv .ip { font-family: var(--font-mono); overflow-wrap: anywhere; } .srv .mw { font-weight: 600; text-align: right; }
+.srv .meta { grid-column: 1 / -1; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; border: 1.5px solid var(--muted); } .dot.on { background: var(--fg); border-color: var(--fg); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--fg); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: var(--bg); padding: 10px 14px; min-height: 48px; font-weight: 600; font-size: 14.5px; }
+.seg button + button { border-left: 1px solid var(--fg); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: #000; }
+.search { flex: 1 1 180px; min-width: 0; min-height: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--fg); background: var(--bg); }
+.vulns { display: flex; flex-direction: column; gap: 10px; }
+.vuln { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.vuln .top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.cve { font-family: var(--font-mono); font-size: 14px; }
+.tag { font-size: 12.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--muted); color: var(--muted); }
+.tag.red { border-color: var(--red); color: var(--red); } .tag.w { border-color: var(--fg); color: var(--fg); }
+.vuln h3 { text-transform: none; font-size: 17px; overflow-wrap: anywhere; } .vuln .prod { color: var(--muted); font-size: 14px; }
+.vuln summary { cursor: pointer; font-weight: 600; min-height: 36px; display: flex; align-items: center; text-decoration: underline; text-underline-offset: 3px; }
+.vuln details p { margin-top: 6px; font-size: 14.5px; overflow-wrap: anywhere; } .vuln .acao { color: var(--muted); }
+.empty { color: var(--muted); font-size: 15px; padding: 6px 0; }
+.help details { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 2px 14px; }
+.help summary { min-height: 48px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+.help ol { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; }
+.help code { font-family: var(--font-mono); font-size: 13px; background: var(--panel-2); padding: 2px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+.src { font-size: 13.5px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; } .src a { color: var(--fg); }
+@media (prefers-reduced-motion: reduce) { .live.on i { animation: none; } }
+</style>
+
+<main class="page">
+  <header class="bar">
+    <h1>Radar de Ameaças</h1>
+    <span class="live off" id="live"><i></i><span id="liveTxt">Aguardando</span></span>
+  </header>
+
+  <section class="sec" aria-label="Mapa">
+    <div class="modes" id="modes" role="group" aria-label="O que mostrar no mapa">
+      <button type="button" data-m="alvos" aria-pressed="false">Mais atacados</button>
+      <button type="button" data-m="origens" aria-pressed="false">Origem</button>
+      <button type="button" data-m="c2" aria-pressed="false">Servidores</button>
+    </div>
+    <p class="note" id="modeNote"></p>
+    <div class="stage" id="stage">
+      <svg id="map" role="img" aria-label="Mapa-múndi em preto e branco. O país em vermelho lidera a métrica escolhida."></svg>
+      <div class="legend"><span class="chip"><i class="sw"></i><span id="legendTxt">Aguardando dados</span></span></div>
+      <div class="zoom">
+        <button type="button" id="zIn" aria-label="Aproximar">+</button>
+        <button type="button" id="zOut" aria-label="Afastar">−</button>
+        <button type="button" id="zReset" aria-label="Ver o mundo todo">⌂</button>
+      </div>
+      <div class="overlay" id="mapErr" hidden>
+        <h2>Mapa indisponível</h2>
+        <p class="lead">Não consegui carregar as fronteiras dos países. Verifique a conexão com a internet e recarregue a página.</p>
+      </div>
+      <div class="overlay" id="empty" hidden>
+        <h2>Aguardando dados reais</h2>
+        <p class="lead">Rode <span class="mono">python servidor.py</span> e abra o endereço que ele mostrar, ou carregue um <span class="mono">dados.json</span> gerado pelo <span class="mono">coletar_dados.py</span>.</p>
+        <label class="btn solid" for="file">Carregar dados.json</label>
+      </div>
+    </div>
+    <input id="file" type="file" accept=".json,application/json" hidden>
+    <p class="hint">Arraste para mover. Use dois dedos ou os botões para aproximar. Toque em um país para ver os detalhes.</p>
+  </section>
+
+  <section class="sec" id="sel" hidden aria-live="polite"></section>
+
+  <section class="sec" aria-labelledby="h-res">
+    <h2 id="h-res">Resumo</h2>
+    <div class="cards">
+      <div class="card"><div class="k" id="k1">–</div><div class="v red" id="v1">–</div><div class="d" id="d1"></div></div>
+      <div class="card"><div class="k">Servidores de botnet no ar</div><div class="v" id="v2">–</div><div class="d" id="d2"></div></div>
+      <div class="card"><div class="k">Falhas em uso por atacantes</div><div class="v" id="v3">–</div><div class="d" id="d3"></div></div>
+      <div class="card"><div class="k">Ligadas a ransomware</div><div class="v" id="v4">–</div><div class="d">Falhas já usadas em ataques de sequestro de dados.</div></div>
+    </div>
+    <p class="note" id="stamp"></p>
+  </section>
+
+  <section class="sec" aria-labelledby="h-rank">
+    <h2 id="h-rank">Ranking de países</h2>
+    <p class="lead" id="rankSrc"></p>
+    <ol class="rank" id="rank"></ol>
+  </section>
+
+  <section class="sec" aria-labelledby="h-falhas">
+    <h2 id="h-falhas">Falhas exploradas ativamente</h2>
+    <p class="lead">Lista da CISA (agência de segurança dos EUA) de falhas já usadas por atacantes. Se você usa algum desses produtos, atualize com prioridade.</p>
+    <div class="filters">
+      <div class="seg" role="group" aria-label="Filtro">
+        <button type="button" id="fAll" aria-pressed="true">Todas</button>
+        <button type="button" id="fRans" aria-pressed="false">Só ransomware</button>
+      </div>
+      <input class="search" id="q" type="search" placeholder="Buscar produto ou CVE" aria-label="Buscar produto ou CVE">
+    </div>
+    <ul class="vulns" id="vulns"></ul>
+    <button class="btn" id="more" type="button" hidden>Mostrar mais</button>
+  </section>
+
+  <section class="sec" aria-labelledby="h-mw">
+    <h2 id="h-mw">Quem está por trás</h2>
+    <div class="two">
+      <div class="box"><h3>Famílias de malware nos servidores</h3><ul class="bars" id="bMw"></ul></div>
+      <div class="box"><h3>Fabricantes com mais falhas exploradas</h3><ul class="bars" id="bVend"></ul></div>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="h-srv">
+    <h2 id="h-srv">Servidores de comando recentes</h2>
+    <p class="lead">Um servidor de comando (C2) é o computador que um criminoso usa para controlar máquinas infectadas.</p>
+    <div class="box"><ul class="srv" id="srv"></ul></div>
+    <button class="btn" id="moreSrv" type="button" hidden>Mostrar mais</button>
+  </section>
+
+  <section class="sec help" aria-labelledby="h-ajuda">
+    <h2 id="h-ajuda">Como manter atualizado</h2>
+    <details>
+      <summary>Ver o passo a passo</summary>
+      <ol>
+        <li>Deixe <span class="mono">painel.html</span>, <span class="mono">coletar_dados.py</span> e <span class="mono">servidor.py</span> na mesma pasta.</li>
+        <li><code>pip install requests</code></li>
+        <li>Para o ranking de países atacados, crie um token gratuito de leitura do Cloudflare Radar e rode <code>export CLOUDFLARE_API_TOKEN=seu_token</code>. Sem ele, o painel usa só servidores de botnet e falhas da CISA.</li>
+        <li><code>python servidor.py</code> e abra o endereço mostrado (no celular, use o IP do computador na mesma rede Wi-Fi).</li>
+        <li>A página busca dados novos a cada 60 segundos e se redesenha sozinha.</li>
+      </ol>
+    </details>
+  </section>
+
+  <footer class="src">
+    <span>Fontes: <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener">CISA KEV</a>, <a href="https://feodotracker.abuse.ch/" target="_blank" rel="noopener">abuse.ch Feodo Tracker</a> e <a href="https://radar.cloudflare.com/" target="_blank" rel="noopener">Cloudflare Radar</a>.</span>
+    <span>São feeds públicos de ameaças, não uma visão completa de todos os ataques do mundo.</span>
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // O script coletar_dados.py troca este valor pelos dados reais.
+  const DADOS_EMBUTIDOS = null;
+
+  // Fronteiras dos países (código ISO-2 → traçado SVG), carregadas de um CDN público.
+  var MAP_URLS = [
+    "https://cdn.jsdelivr.net/npm/jsvectormap@1.5.3/dist/maps/world.js",
+    "https://unpkg.com/jsvectormap@1.5.3/dist/maps/world.js"
+  ];
+  var POLL_S = 60;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  var nf = function (n) { return Number(n).toLocaleString("pt-BR"); };
+  var pf = function (n) { return Number(n).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%"; };
+  function dia(s) { return s ? new Date(s + "T12:00:00") : null; }
+  function fmtData(s) { var d = dia(s); return d && !isNaN(d) ? d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" }) : "–"; }
+  function diasAte(s) { var d = dia(s); if (!d || isNaN(d)) return null; var h = new Date(); h.setHours(12, 0, 0, 0); return Math.round((d - h) / 86400000); }
+  var regioes = null;
+  try { regioes = new Intl.DisplayNames(["pt-BR"], { type: "region" }); } catch (e) {}
+  var mapNames = {};
+  function nomePais(c) {
+    if (c === "??") return "País desconhecido";
+    var n = null;
+    try { n = regioes && c.length === 2 ? regioes.of(c) : null; } catch (e) {}
+    return (n && n !== c) ? n : (mapNames[c] || c);
+  }
+
+  // ---- estado ----
+  var D = DADOS_EMBUTIDOS, mode = null, sel = null, soRansom = false, busca = "", limiteV = 10, limiteS = 10;
+  var statusKind = "wait", proximo = POLL_S, ultimoOk = 0;
+  var paths = {}, info = {}, labels = {}, W0 = 900, H0 = 440.7, vb = { x: 0, y: 0, w: 900, h: 440.7 };
+  var svg = $("map"), gPaths = null, gLabels = null;
+
+  // ---- métricas ----
+  function valores(m) {
+    var r = {};
+    if (!D) return r;
+    if (m === "c2" && D.c2) { Object.keys(D.c2.por_pais).forEach(function (c) { if (c !== "??") r[c] = D.c2.por_pais[c]; }); }
+    else if ((m === "alvos" || m === "origens") && D[m]) { D[m].itens.forEach(function (i) { r[i.pais] = i.valor; }); }
+    return r;
+  }
+  function disponiveis() {
+    return { alvos: !!(D && D.alvos), origens: !!(D && D.origens), c2: !!(D && D.c2) };
+  }
+  function ordenado(m) { var v = valores(m); return Object.keys(v).map(function (c) { return [c, v[c]]; }).sort(function (a, b) { return b[1] - a[1]; }); }
+  function fmtVal(m, v) { return m === "c2" ? nf(v) + (v === 1 ? " servidor" : " servidores") : pf(v); }
+  var LEG = { alvos: "Vermelho: país que mais recebeu ataques (24 h)", origens: "Vermelho: país de onde mais partem ataques (24 h)", c2: "Vermelho: país com mais servidores de botnet" };
+  var TIT = { alvos: "Países mais atacados", origens: "Países de origem dos ataques", c2: "Países com mais servidores de botnet" };
+  var NOTA_ALVOS = "Ranking de países atacados exige um token gratuito do Cloudflare Radar (veja “Como manter atualizado”).";
+
+  // ---- mapa: carga das fronteiras ----
+  function construirMapa(m) {
+    var ins = m.insets && m.insets[0];
+    W0 = (ins && ins.width) || m.width || 900; H0 = (ins && ins.height) || m.height || 440.7;
+    vb = { x: 0, y: 0, w: W0, h: H0 };
+    svg.textContent = "";
+    gPaths = document.createElementNS(NS, "g"); gLabels = document.createElementNS(NS, "g");
+    svg.appendChild(gPaths); svg.appendChild(gLabels);
+    Object.keys(m.paths).forEach(function (c) {
+      if (c === "AQ") return;
+      var p = document.createElementNS(NS, "path");
+      p.setAttribute("d", m.paths[c].path); p.setAttribute("class", "c"); p.setAttribute("data-c", c);
+      gPaths.appendChild(p); paths[c] = p; mapNames[c] = m.paths[c].name || c;
+    });
+    Object.keys(paths).forEach(function (c) {
+      var chunks = m.paths[c].path.split(/(?=M)/), best = null, tmp = document.createElementNS(NS, "path");
+      tmp.setAttribute("visibility", "hidden"); svg.appendChild(tmp);
+      chunks.forEach(function (d) {
+        tmp.setAttribute("d", d);
+        var b; try { b = tmp.getBBox(); } catch (e) { return; }
+        var a = b.width * b.height;
+        if (!best || a > best.a) best = { a: a, x: b.x + b.width / 2, y: b.y + b.height / 2, w: b.width, h: b.height };
+      });
+      svg.removeChild(tmp);
+      if (best) info[c] = best;
+    });
+    Object.keys(info).forEach(function (c) {
+      var t = document.createElementNS(NS, "text"); t.textContent = nomePais(c);
+      t.setAttribute("x", info[c].x); t.setAttribute("y", info[c].y); t.setAttribute("display", "none");
+      gLabels.appendChild(t); labels[c] = t;
+    });
+    reiniciarVista(); pintar();
+  }
+  function carregarMapa(i) {
+    var pronto = window.jsVectorMap && window.jsVectorMap.maps && window.jsVectorMap.maps.world;
+    if (pronto) { construirMapa(pronto); return; }
+    if (i >= MAP_URLS.length) { $("mapErr").hidden = false; return; }
+    if (!window.jsVectorMap) {
+      var reg = {}; window.jsVectorMap = { maps: reg, addMap: function (n, mm) { reg[n] = mm; return window.jsVectorMap; } };
+    }
+    var s = document.createElement("script"); s.src = MAP_URLS[i];
+    s.onload = function () {
+      var w = window.jsVectorMap && window.jsVectorMap.maps && window.jsVectorMap.maps.world;
+      if (w && w.paths) construirMapa(w); else carregarMapa(i + 1);
+    };
+    s.onerror = function () { carregarMapa(i + 1); };
+    document.head.appendChild(s);
+  }
+
+  // ---- mapa: cores e rótulos ----
+  function pintar() {
+    var v = valores(mode), lista = ordenado(mode), max = lista.length ? lista[0][1] : 1;
+    Object.keys(paths).forEach(function (c) {
+      var p = paths[c], x = v[c];
+      p.classList.toggle("sel", c === sel);
+      if (x == null) { p.style.fill = ""; return; }
+      if (lista[0] && lista[0][0] === c) { p.style.fill = "#ff2b2b"; return; }
+      var g = Math.round(46 + Math.sqrt(x / max) * 150);
+      p.style.fill = "rgb(" + g + "," + g + "," + g + ")";
+    });
+    if (sel && paths[sel]) gPaths.appendChild(paths[sel]);
+    if (lista[0] && paths[lista[0][0]]) gPaths.insertBefore(paths[lista[0][0]], sel && paths[sel] ? paths[sel] : null);
+    $("legendTxt").textContent = lista.length ? LEG[mode] : "Aguardando dados";
+    atualizarRotulos();
+  }
+  var rafId = 0;
+  function agendarRotulos() { if (!rafId) rafId = requestAnimationFrame(function () { rafId = 0; atualizarRotulos(); }); }
+  function atualizarRotulos() {
+    var rw = svg.clientWidth || 360, sc = rw / vb.w, fs = 11 / sc;
+    var v = valores(mode), lista = ordenado(mode), topo = {};
+    lista.slice(0, 3).forEach(function (it) { topo[it[0]] = true; });
+    Object.keys(labels).forEach(function (c) {
+      var t = labels[c], f = info[c], nome = t.textContent;
+      var dentro = f.x >= vb.x - f.w && f.x <= vb.x + vb.w + f.w && f.y >= vb.y - f.h && f.y <= vb.y + vb.h + f.h;
+      var cabe = f.w * sc >= nome.length * 5.6 + 6 || (f.h * sc >= 18 && f.w * sc >= 40 && nome.length < 9);
+      var mostrar = dentro && (cabe || c === sel || (topo[c] && sc > 0.8));
+      if (!mostrar) { t.setAttribute("display", "none"); return; }
+      t.removeAttribute("display");
+      t.setAttribute("font-size", (c === sel || topo[c] ? fs * 1.15 : fs).toFixed(3));
+      t.setAttribute("stroke-width", (3.2 / sc).toFixed(3));
+      t.style.fontWeight = (c === sel || (lista[0] && lista[0][0] === c)) ? 800 : 600;
+    });
+  }
+
+  // ---- mapa: vista (arrastar e zoom) ----
+  function aspecto() { var r = svg.getBoundingClientRect(); return (r.width / r.height) || 2; }
+  function limitar() {
+    var a = aspecto(), hMax = Math.max(H0, W0 / a);
+    vb.h = Math.min(Math.max(vb.h, H0 / 16), hMax); vb.w = vb.h * a;
+    if (vb.w > W0) { vb.w = W0; vb.h = vb.w / a; }
+    // se a vista é maior que o mapa, ele fica centralizado; senão, não deixa sair das bordas
+    vb.x = vb.w >= W0 ? (W0 - vb.w) / 2 : Math.min(Math.max(vb.x, 0), W0 - vb.w);
+    vb.y = vb.h >= H0 ? (H0 - vb.h) / 2 : Math.min(Math.max(vb.y, 0), H0 - vb.h);
+  }
+  function aplicarVista() { limitar(); svg.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); agendarRotulos(); }
+  function reiniciarVista() { vb.h = Math.max(H0, W0 / aspecto()); vb.w = vb.h * aspecto(); aplicarVista(); }
+  function zoomEm(f, px, py) {
+    var r = svg.getBoundingClientRect(), fx = px / r.width, fy = py / r.height;
+    var ux = vb.x + fx * vb.w, uy = vb.y + fy * vb.h;
+    vb.h = vb.h / f; vb.w = vb.h * aspecto(); vb.x = ux - fx * vb.w; vb.y = uy - fy * vb.h; aplicarVista();
+  }
+  function zoomPara(c) {
+    var f = info[c]; if (!f) return;
+    vb.h = Math.max(H0 / 5, Math.min(H0 / 2.2, f.h * 4)); vb.w = vb.h * aspecto(); vb.x = f.x - vb.w / 2; vb.y = f.y - vb.h / 2; aplicarVista();
+  }
+  var ptrs = {}, movido = 0, pinch0 = 0, nptr0 = 0;
+  svg.addEventListener("pointerdown", function (e) {
+    ptrs[e.pointerId] = { x: e.clientX, y: e.clientY }; movido = 0; nptr0 = Object.keys(ptrs).length;
+    if (nptr0 === 2) { var k = Object.keys(ptrs).map(function (i) { return ptrs[i]; }); pinch0 = Math.hypot(k[0].x - k[1].x, k[0].y - k[1].y); }
+  });
+  window.addEventListener("pointermove", function (e) {
+    var p = ptrs[e.pointerId]; if (!p) return;
+    var r = svg.getBoundingClientRect(), ids = Object.keys(ptrs);
+    if (ids.length === 1) {
+      var dx = e.clientX - p.x, dy = e.clientY - p.y; movido += Math.abs(dx) + Math.abs(dy);
+      vb.x -= dx / r.width * vb.w; vb.y -= dy / r.height * vb.h; p.x = e.clientX; p.y = e.clientY; aplicarVista();
+    } else if (ids.length === 2) {
+      p.x = e.clientX; p.y = e.clientY; movido += 10;
+      var a = ptrs[ids[0]], b = ptrs[ids[1]], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch0 > 0 && d > 0) { zoomEm(d / pinch0, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top); pinch0 = d; }
+    }
+  });
+  function soltar(e) {
+    if (!ptrs[e.pointerId]) return;
+    var tinha = nptr0; delete ptrs[e.pointerId];
+    if (e.type === "pointerup" && tinha === 1 && movido < 8) {
+      var alvo = document.elementFromPoint(e.clientX, e.clientY), pth = alvo && alvo.closest ? alvo.closest("path[data-c]") : null;
+      escolher(pth ? pth.getAttribute("data-c") : null, false);
+    }
+    if (!Object.keys(ptrs).length) nptr0 = 0;
+  }
+  window.addEventListener("pointerup", soltar); window.addEventListener("pointercancel", soltar);
+  svg.addEventListener("wheel", function (e) { e.preventDefault(); var r = svg.getBoundingClientRect(); zoomEm(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  $("zIn").addEventListener("click", function () { var r = svg.getBoundingClientRect(); zoomEm(1.6, r.width / 2, r.height / 2); });
+  $("zOut").addEventListener("click", function () { var r = svg.getBoundingClientRect(); zoomEm(1 / 1.6, r.width / 2, r.height / 2); });
+  $("zReset").addEventListener("click", reiniciarVista);
+
+  // ---- país selecionado ----
+  function escolher(c, zoom) {
+    sel = (c && c === sel && !zoom) ? null : c;
+    pintar(); renderSel();
+    if (sel && zoom) zoomPara(sel);
+  }
+  function posicao(m, c) { var l = ordenado(m), i = l.findIndex(function (x) { return x[0] === c; }); return i < 0 ? null : { pos: i + 1, de: l.length, val: l[i][1] }; }
+  function renderSel() {
+    var box = $("sel"); box.textContent = "";
+    if (!sel) { box.hidden = true; return; }
+    box.hidden = false;
+    var s = el("div", "sheet"), head = el("div", "head"), tt = el("div");
+    tt.appendChild(el("p", "muted mono", sel)); tt.appendChild(el("h3", null, nomePais(sel)));
+    var x = el("button", "x", "✕"); x.type = "button"; x.setAttribute("aria-label", "Fechar"); x.addEventListener("click", function () { escolher(null, false); });
+    head.appendChild(tt); head.appendChild(x); s.appendChild(head);
+    var kv = el("div", "kv"), tem = false;
+    [["alvos", "Alvo de ataques"], ["origens", "Origem de ataques"], ["c2", "Servidores de botnet"]].forEach(function (mm) {
+      var p = posicao(mm[0], sel); if (!p) return; tem = true;
+      var d = el("div"); d.appendChild(el("b", null, mm[0] === "c2" ? nf(p.val) : pf(p.val))); d.appendChild(el("span", null, mm[1] + " · #" + p.pos + " de " + p.de)); kv.appendChild(d);
+    });
+    if (tem) s.appendChild(kv); else s.appendChild(el("p", "hint", "Este país não aparece nas listas de dados coletadas agora."));
+    var lista = D && D.c2 ? (D.c2.servidores || []).filter(function (r) { return r.pais === sel; }) : [];
+    if (lista.length) {
+      s.appendChild(el("h3", null, "Servidores de comando neste país"));
+      var ul = el("ul", "srv"); lista.slice(0, 15).forEach(function (r) { ul.appendChild(itemServidor(r)); }); s.appendChild(ul);
+    }
+    box.appendChild(s);
+  }
+  function itemServidor(r) {
+    var li = el("li"), ip = el("span", "ip"); ip.appendChild(el("span", "dot" + (r.status === "online" ? " on" : ""))); ip.appendChild(document.createTextNode(r.ip + (r.porta ? ":" + r.porta : "")));
+    li.appendChild(ip); li.appendChild(el("span", "mw", r.malware));
+    li.appendChild(el("span", "meta", nomePais(r.pais) + " · " + (r.status === "online" ? "no ar" : "fora do ar") + " · visto em " + fmtData(r.ultimo_online) + (r.rede ? " · " + r.rede : "")));
+    return li;
+  }
+
+  // ---- painéis ----
+  function renderBars(id, pares) {
+    var ul = $(id); ul.textContent = "";
+    if (!pares || !pares.length) { ul.appendChild(el("li", "empty", "Sem dados nesta coleta.")); return; }
+    var max = pares[0][1] || 1;
+    pares.forEach(function (p) {
+      var li = el("li"); li.appendChild(el("span", null, p[0])); li.appendChild(el("span", "nn", nf(p[1])));
+      var t = el("div", "t"), b = el("b"); b.style.width = Math.round(p[1] / max * 100) + "%"; t.appendChild(b); li.appendChild(t); ul.appendChild(li);
+    });
+  }
+  function renderRank() {
+    var ol = $("rank"); ol.textContent = ""; var lista = ordenado(mode);
+    $("rankSrc").textContent = D && mode && D[mode] && D[mode].fonte ? D[mode].fonte : (mode === "c2" ? "abuse.ch Feodo Tracker · servidores de comando de botnets listados" : "");
+    if (!lista.length) { ol.appendChild(el("li", "empty", "Sem dados para esta visão.")); return; }
+    var max = lista[0][1] || 1;
+    lista.slice(0, 10).forEach(function (it, i) {
+      var li = el("li", i === 0 ? "top" : ""), b = el("button"); b.type = "button";
+      b.appendChild(el("span", "n", String(i + 1))); b.appendChild(el("span", "nm", nomePais(it[0]))); b.appendChild(el("span", "val", fmtVal(mode, it[1])));
+      var tr = el("div", "tr"), fill = el("b"); fill.style.width = Math.max(3, Math.round(it[1] / max * 100)) + "%"; tr.appendChild(fill); b.appendChild(tr);
+      b.addEventListener("click", function () { escolher(it[0], true); window.scrollTo({ top: $("stage").getBoundingClientRect().top + window.scrollY - 70, behavior: "smooth" }); });
+      li.appendChild(b); ol.appendChild(li);
+    });
+  }
+  function renderCards() {
+    var lista = ordenado(mode), c2 = D && D.c2, kev = D && D.kev;
+    $("k1").textContent = mode === "origens" ? "País de origem líder" : mode === "c2" ? "País com mais servidores" : "País mais atacado";
+    var v1 = $("v1"); v1.textContent = lista.length ? nomePais(lista[0][0]) : "–"; v1.className = "v sm red";
+    $("d1").textContent = lista.length ? fmtVal(mode, lista[0][1]) : "";
+    $("v2").textContent = c2 ? nf(c2.online) : "–"; $("d2").textContent = c2 ? "de " + nf(c2.total) + " listados." : "";
+    $("v3").textContent = kev ? nf(kev.total) : "–"; $("d3").textContent = kev ? nf(kev.ultimos_30_dias) + " novas em 30 dias." : "";
+    $("v4").textContent = kev ? nf(kev.ransomware) : "–";
+  }
+  function renderVulns() {
+    var ul = $("vulns"); ul.textContent = "";
+    if (!D || !D.kev) { ul.appendChild(el("li", "empty", "Sem dados da CISA nesta coleta.")); $("more").hidden = true; return; }
+    var q = busca.trim().toLowerCase();
+    var lista = D.kev.recentes.filter(function (v) { if (soRansom && !v.ransomware) return false; return !q || [v.cve, v.fabricante, v.produto, v.nome].join(" ").toLowerCase().indexOf(q) >= 0; });
+    if (!lista.length) ul.appendChild(el("li", "empty", "Nenhuma falha encontrada com esse filtro."));
+    lista.slice(0, limiteV).forEach(function (v) {
+      var li = el("li", "vuln"), top = el("div", "top");
+      top.appendChild(el("span", "cve", v.cve));
+      if (v.ransomware) top.appendChild(el("span", "tag red", "Usada em ransomware"));
+      var dd = diasAte(v.prazo);
+      if (dd !== null) top.appendChild(el("span", "tag" + (dd >= 0 && dd <= 7 ? " w" : ""), dd < 0 ? "Prazo da CISA já passou" : dd === 0 ? "Prazo termina hoje" : "Corrigir em até " + dd + " dia(s)"));
+      li.appendChild(top); li.appendChild(el("h3", null, v.nome || v.cve));
+      li.appendChild(el("p", "prod", (v.fabricante || "") + " · " + (v.produto || "") + " · incluída em " + fmtData(v.adicionado)));
+      var det = el("details"); det.appendChild(el("summary", null, "O que é e o que fazer")); det.appendChild(el("p", null, v.descricao || "Sem descrição."));
+      if (v.acao) det.appendChild(el("p", "acao", "Ação recomendada: " + v.acao));
+      li.appendChild(det); ul.appendChild(li);
+    });
+    $("more").hidden = lista.length <= limiteV;
+  }
+  function renderSrv() {
+    var ul = $("srv"); ul.textContent = "";
+    var l = D && D.c2 ? D.c2.servidores || [] : [];
+    if (!l.length) { ul.appendChild(el("li", "empty", "Sem dados de servidores nesta coleta.")); $("moreSrv").hidden = true; return; }
+    l.slice(0, limiteS).forEach(function (r) { ul.appendChild(itemServidor(r)); });
+    $("moreSrv").hidden = l.length <= limiteS;
+  }
+
+  // ---- modos e status ----
+  function escolherModo(m) {
+    mode = m;
+    var disp = disponiveis();
+    Array.prototype.forEach.call($("modes").children, function (b) {
+      var k = b.getAttribute("data-m"); b.setAttribute("aria-pressed", k === m ? "true" : "false"); b.setAttribute("aria-disabled", disp[k] ? "false" : "true");
+    });
+    $("modeNote").textContent = !disp.alvos ? NOTA_ALVOS : (m ? TIT[m] + ". " + ((D && D[m] && D[m].fonte) || "") : "");
+    pintar(); renderCards(); renderRank();
+  }
+  $("modes").addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b) return;
+    var k = b.getAttribute("data-m");
+    if (!disponiveis()[k]) { $("modeNote").textContent = k === "c2" ? "Sem dados de servidores nesta coleta." : NOTA_ALVOS; return; }
+    escolherModo(k);
+  });
+  function modoPadrao() { var d = disponiveis(); return d.alvos ? "alvos" : d.c2 ? "c2" : d.origens ? "origens" : null; }
+
+  function setStatus() {
+    var live = $("live"), txt = $("liveTxt");
+    if (!D) { live.className = "live off"; txt.textContent = "Aguardando"; return; }
+    if (statusKind === "live") { live.className = "live on"; txt.textContent = "Ao vivo · " + proximo + "s"; }
+    else { live.className = "live off"; txt.textContent = "Estático"; }
+    var q = D.gerado_em ? new Date(D.gerado_em) : null;
+    var e = D.erros && Object.keys(D.erros).filter(function (k) { return k !== "alvos" || D.alvos !== null; });
+    $("stamp").textContent = (q ? "Coleta de " + q.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) + ". " : "") +
+      (statusKind === "live" ? "Esta página busca dados novos a cada " + POLL_S + " segundos." : "Sem atualização automática: abra pelo servidor.py para atualizar sozinho.") +
+      (e && e.length ? " Fonte(s) com falha: " + e.join(", ") + "." : "");
+  }
+  function aplicar(j) {
+    var mudou = !D || D.gerado_em !== j.gerado_em;
+    D = j;
+    $("empty").hidden = true;
+    if (!mode || !disponiveis()[mode]) mode = modoPadrao();
+    if (mudou) { limiteV = 10; limiteS = 10; }
+    escolherModo(mode); renderSel(); renderVulns(); renderSrv();
+    renderBars("bMw", D.c2 ? Object.keys(D.c2.por_malware).map(function (k) { return [k, D.c2.por_malware[k]]; }).slice(0, 8) : []);
+    renderBars("bVend", D.kev ? D.kev.fabricantes.slice(0, 8) : []);
+    setStatus();
+  }
+  function buscar() {
+    return fetch("dados.json?ts=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("http"); return r.json(); })
+      .then(function (j) { if (!j || !(j.kev || j.c2 || j.alvos)) throw new Error("formato"); statusKind = "live"; ultimoOk = Date.now(); aplicar(j); })
+      .catch(function () { if (statusKind === "live") statusKind = "off"; if (!D) $("empty").hidden = false; setStatus(); });
+  }
+  setInterval(function () {
+    proximo -= 1; if (proximo <= 0) { proximo = POLL_S; buscar(); }
+    if (statusKind === "live") setStatus();
+  }, 1000);
+
+  // ---- eventos ----
+  function seg(a) { soRansom = a; limiteV = 10; $("fAll").setAttribute("aria-pressed", a ? "false" : "true"); $("fRans").setAttribute("aria-pressed", a ? "true" : "false"); renderVulns(); }
+  $("fAll").addEventListener("click", function () { seg(false); });
+  $("fRans").addEventListener("click", function () { seg(true); });
+  $("q").addEventListener("input", function (e) { busca = e.target.value; limiteV = 10; renderVulns(); });
+  $("more").addEventListener("click", function () { limiteV += 10; renderVulns(); });
+  $("moreSrv").addEventListener("click", function () { limiteS += 10; renderSrv(); });
+  $("file").addEventListener("change", function (e) {
+    var f = e.target.files && e.target.files[0]; if (!f) return;
+    var r = new FileReader();
+    r.onload = function () {
+      try { var j = JSON.parse(r.result); if (!j || !(j.kev || j.c2 || j.alvos)) throw new Error("formato"); statusKind = "off"; aplicar(j); }
+      catch (err) { $("stamp").textContent = "Arquivo inválido. Use o dados.json gerado pelo coletar_dados.py."; }
+    };
+    r.readAsText(f);
+  });
+  var rt; window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { if (gPaths) aplicarVista(); }, 120); });
+
+  // ---- início ----
+  carregarMapa(0);
+  if (D) { statusKind = "off"; aplicar(D); } else { setStatus(); }
+  buscar();
+})();
+</script>
